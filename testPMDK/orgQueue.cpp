@@ -1,6 +1,5 @@
 #include "orgQueue.h"
 
-
 /*
  * queue_constructor -- constructor of the queue container
  */
