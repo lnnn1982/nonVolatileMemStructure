@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Common.h"
-#include <libpmemobj.h>
 
 POBJ_LAYOUT_BEGIN(orgQueue);
 POBJ_LAYOUT_ROOT(orgQueue, struct OrgQueueRoot);

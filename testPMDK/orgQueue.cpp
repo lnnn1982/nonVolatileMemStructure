@@ -1,4 +1,8 @@
+#include <pthread.h>
 #include "orgQueue.h"
+
+pthread_mutex_t enqueueMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t dequeueMutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * queue_constructor -- constructor of the queue container
@@ -37,7 +41,13 @@ int OrgQueue::newQueue(PMEMobjpool *pop, TOID(struct OrgQueue) *q, size_t nentri
  */
 size_t OrgQueue::nentries()
 {
-	return back_ - front_;
+    if(back_ >= front_) {
+        return back_ - front_;
+    }
+    else {
+        return capacity_-front_+back_;
+    }
+	
 }
 
 /*
@@ -45,35 +55,43 @@ size_t OrgQueue::nentries()
  */
 int OrgQueue::enqueue(PMEMobjpool *pop, const char *data, size_t len)
 {
-	if (capacity_ - nentries() == 0)
-		return -1; /* at capacity */
+    int ret = 0;
+    pthread_mutex_lock(&enqueueMutex);
 
-    /* back is never decreased, need to calculate the real position */
-	size_t pos = back_ % capacity_;
+    size_t curSize = nentries();
+	if (capacity_ == curSize) {
+        std::cout << "***********nentries:" << curSize << " equal to capacity." << std::endl;
+        pthread_mutex_unlock (&enqueueMutex);
+        return -1; /* at capacity */
+    }
+		
+	/* back is never decreased, need to calculate the real position */
+	//size_t pos = back_ % capacity_;
+	size_t pos = back_;
 
-	int ret = 0;
-
-	printf("inserting %zu: %s\n", pos, data);
- 
+	//printf("inserting %zu %zu: %s\n", back_, pos, data);
 	TX_BEGIN(pop) {
 		/* let's first reserve the space at the end of the queue */
 		TX_ADD_DIRECT(&back_);
-		back_ += 1;
-
+		//back_ += 1;
+        back_ = (back_+1)%capacity_;
+        
 		/* now we can safely allocate and initialize the new entry */
 		TOID(struct OrgQueueEntry) entry = TX_ALLOC(struct OrgQueueEntry,
 			sizeof(struct OrgQueueEntry) + len);
-        
-		D_RW(entry)->len_ = len;
+		D_RW(entry)->len_ = len;  
 		memcpy(D_RW(entry)->data_, data, len);
 
 		/* and then snapshot the queue entry that we will modify */
 		TX_ADD_DIRECT(&entries_[pos]);
 		entries_[pos] = entry;
 	} TX_ONABORT { /* don't forget about error handling! ;) */
+        std::cout << "****************enqueue abort " << ", pos:" << pos 
+            << ", back_:" << back_ << std::endl;
 		ret = -1;
 	} TX_END
 
+    pthread_mutex_unlock (&enqueueMutex);
 	return ret;
 }
 
@@ -82,27 +100,34 @@ int OrgQueue::enqueue(PMEMobjpool *pop, const char *data, size_t len)
  */
 int OrgQueue::dequeue(PMEMobjpool *pop)
 {
-	if (nentries() == 0)
-		return -1; /* no entries to remove */
+    int ret = 0;
+    pthread_mutex_lock(&dequeueMutex);
 
-	/* front is also never decreased */
-	size_t pos = front_ % capacity_;
-
-	int ret = 0;
-
-	printf("removing %zu: %s\n", pos, D_RO(entries_[pos])->data_);
-
+    if (back_ == front_) {
+        pthread_mutex_unlock(&dequeueMutex);
+        return -1; /* no entries to remove */
+    }
+		
+    /* front is also never decreased */
+	//size_t pos = front_ % capacity_;
+    size_t pos = front_;
+    
+	//printf("removing %zu: %s\n", pos, D_RO(entries_[pos])->data_);
 	TX_BEGIN(pop) {
 		/* move the queue forward */
 		TX_ADD_DIRECT(&front_);
-		front_ += 1;
+        //front_ += 1;
+        front_ = (front_+1)%capacity_;
+        
 		/* and since this entry is now unreachable, free it */
 		TX_FREE(entries_[pos]);
 		/* notice that we do not change the PMEMoid itself */
 	} TX_ONABORT {
+	    std::cout << "*******************dequeue abort" << std::endl;
 		ret = -1;
 	} TX_END
 
+    pthread_mutex_unlock (&dequeueMutex);
 	return ret;
 }
 
